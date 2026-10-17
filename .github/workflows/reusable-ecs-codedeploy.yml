@@ -256,51 +256,64 @@ jobs:
           echo "console_url=$CONSOLE_URL" >> $GITHUB_OUTPUT
           echo "🔗 Console: $CONSOLE_URL"
 
-      - name: ⏱️ Wait for initial health check (Hybrid Strategy)
+      # INVEST-005/EPIC-017/FEATURE-002/US-089 — **wait for the real outcome, not a 3-minute guess.**
+      #
+      # This step used to give up after 3 minutes and report success either way (the "Hybrid
+      # Strategy"), on the theory that a longer blue/green shift "continues in background". It does
+      # — but every job gated on this one via `needs: deploy` (every Lambda-deploy job in every
+      # consuming service) started the moment that early, unconfirmed green appeared, not when
+      # CodeDeploy actually decided. On 2026-10-17 that let `vehicle-manager`'s
+      # `recheck-vehicle-manager-production` Lambda keep running a release CodeDeploy had already
+      # rolled back, for hours, because this step told it the deployment was done.
+      #
+      # The ceiling is now 1800s (30 min) — comfortably past any real rollout plus its termination
+      # wait (render's linear rollout is the slowest consumer at ~10 min; vehicle-manager's
+      # ECSAllAtOnce + 5-min termination wait is faster) — and exceeding it is now itself a failure,
+      # not a silent "could not verify, that's normal". A deployment that has not resolved in 30
+      # minutes needs a person, same judgment the "wait for any active deployment" step above
+      # already makes about its own ceiling.
+      #
+      # **This does not slow down the fast path.** `aws deploy wait` already returns the moment the
+      # real status resolves — at 30s or at 25 minutes — so raising the ceiling from 180s to 1800s
+      # changes nothing for a deployment that already finishes inside the old window.
+      - name: ⏱️ Wait for the deployment's confirmed outcome
         id: wait-deployment
-        continue-on-error: true  # Don't fail if timeout
+        continue-on-error: true  # The summary + fail-on-error steps below decide the job's fate
         run: |
           DEPLOYMENT_ID="${{ steps.create-deployment.outputs.deployment_id }}"
-          
-          echo "Waiting for initial health check (max 3 minutes)..."
-          echo "Full deployment continues in background"
-          
-          # Wait max 180 seconds (3 minutes)
-          timeout 180 aws deploy wait deployment-successful \
+
+          echo "Waiting for the deployment to resolve (max 30 minutes)..."
+
+          # Wait max 1800 seconds (30 minutes) for CodeDeploy's own terminal outcome.
+          timeout 1800 aws deploy wait deployment-successful \
             --deployment-id $DEPLOYMENT_ID || {
             EXIT_CODE=$?
             if [ $EXIT_CODE -eq 124 ]; then
-              echo "⏰ Timeout after 3 minutes (expected for long deployments)"
-              echo "Deployment continues in background"
-              echo "status=timeout" >> $GITHUB_OUTPUT
+              echo "::error::Deployment $DEPLOYMENT_ID did not resolve within 1800s."
+              echo "This is now treated as a failure rather than a guess — see INVEST-005/EPIC-017/FEATURE-002/US-089."
+              echo "status=error" >> $GITHUB_OUTPUT
             else
               echo "⚠️ Wait command failed with exit code: $EXIT_CODE"
               echo "status=error" >> $GITHUB_OUTPUT
             fi
-            exit 0  # Don't fail the step
+            exit 0  # Don't fail the step — the fail-on-error step below decides the job's fate
           }
-          
-          # If we get here, deployment completed within 3 minutes
-          echo "✅ Initial health check passed!"
+
+          # If we get here, CodeDeploy itself reports the deployment succeeded.
+          echo "✅ Deployment confirmed successful!"
           echo "status=success" >> $GITHUB_OUTPUT
 
       # INVEST-005/EPIC-017/FEATURE-002/US-007, phase 2 — **did the deployment actually take?**
       #
-      # Everything before this reports on the deployment being *created* and on a health check. None
-      # of it asks the question a person actually has: is the service running the image this run
-      # just built? ai-webstudio42 #189 answered "deployment created" and served the previous build
-      # for hours.
+      # Everything before this reports on the deployment being *created*. None of it asks the
+      # question a person actually has: is the service running the image this run just built?
+      # ai-webstudio42 #189 answered "deployment created" and served the previous build for hours.
       #
-      # **Only when the deployment finished inside the wait above.** The step before this one waits
-      # three minutes and then deliberately lets a longer deployment continue in the background —
-      # the hybrid strategy. During a blue/green shift the service still names the old task
-      # definition, so reading it back early would report a mismatch on a deployment that is going
-      # perfectly. A check that cries wolf on the normal case is worse than no check.
-      #
-      # So this verifies the fast case and **says out loud when it cannot verify** rather than
-      # implying success by silence. The slow case is what the drift watchdog exists for
-      # (`reusable-deployment-drift-check.yml`), and that one sees it from outside, minutes later,
-      # without needing this run to still be alive.
+      # **Only when the wait above resolved to `success`.** Since US-089, that only happens once
+      # CodeDeploy itself reports the deployment finished — never while a blue/green shift is still
+      # under way, so there is no "normal mismatch" case left to guard against here. If the wait
+      # resolved to `error` instead, the job already fails via the step below; this check never runs
+      # on an unconfirmed outcome.
       - name: 🔍 Verify the running image is the one we built
         if: steps.wait-deployment.outputs.status == 'success'
         env:
@@ -337,14 +350,19 @@ jobs:
           echo "to make visible — see INVEST-005/EPIC-017/FEATURE-002/US-007."
           exit 1
 
-      # The counterpart to the step above: a run that could not verify says so, because a check that
-      # is silent when it did not run is indistinguishable from one that passed.
-      - name: ℹ️ Could not verify from here
+      # The counterpart to the step above: a run that could not confirm the outcome says so loudly,
+      # right next to the "✅ Fail on deployment error" step below that actually fails the job for
+      # it — since US-089 this branch only means the deployment failed, was rolled back, or never
+      # resolved inside the 30-minute ceiling. There is no longer a "still in progress, that's
+      # normal" case that reaches here; every job depending on this one (including every
+      # Lambda-deploy job) is about to be skipped, not merely informed.
+      - name: ℹ️ Could not confirm the deployment succeeded
         if: steps.wait-deployment.outputs.status != 'success'
         run: |
-          echo "::notice::The deployment was still in progress when this run finished, so this run"
-          echo "cannot say whether the new image is serving. That is normal for a blue/green shift"
-          echo "longer than three minutes. The drift check will answer it from outside."
+          echo "::error::The deployment's outcome could not be confirmed as successful — failing"
+          echo "this job so nothing that depends on it (including any Lambda deploy) proceeds on an"
+          echo "unconfirmed outcome. See the Deployment Summary below and the AWS CodeDeploy console"
+          echo "for the deployment this run created."
 
       - name: 📊 Display Deployment Summary
         if: always()
@@ -369,12 +387,9 @@ jobs:
             echo "" >> $GITHUB_STEP_SUMMARY
             
             if [ "$WAIT_STATUS" == "success" ]; then
-              echo "**Health Check:** ✅ Passed (within 3 minutes)" >> $GITHUB_STEP_SUMMARY
-            elif [ "$WAIT_STATUS" == "timeout" ]; then
-              echo "**Health Check:** ⏰ Continuing in background" >> $GITHUB_STEP_SUMMARY
-              echo "Full deployment (10% per minute) takes ~10 minutes" >> $GITHUB_STEP_SUMMARY
+              echo "**Outcome:** ✅ Confirmed by CodeDeploy" >> $GITHUB_STEP_SUMMARY
             else
-              echo "**Health Check:** ⏸️ In Progress" >> $GITHUB_STEP_SUMMARY
+              echo "**Outcome:** ❌ Failed, or not confirmed within 30 minutes — see below" >> $GITHUB_STEP_SUMMARY
             fi
             
             echo "" >> $GITHUB_STEP_SUMMARY
@@ -394,8 +409,11 @@ jobs:
             fi
           fi
 
+      # `!= 'success'` rather than `== 'error'`: the same defensive style already used by the
+      # "Could not confirm" step just above, so a future status value this script doesn't yet know
+      # about fails the job rather than silently passing it.
       - name: ✅ Fail on deployment error
-        if: steps.wait-deployment.outputs.status == 'error'
+        if: steps.wait-deployment.outputs.status != 'success'
         run: |
           echo "❌ Deployment failed - check AWS CodeDeploy console for details"
           exit 1

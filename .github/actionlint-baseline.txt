@@ -2,7 +2,7 @@
 1 .github/workflows/reusable-deploy-ecr.yml	shellcheck reported issue in this script: SC2034:warning: i appears unused. Verify use (or export if used externally) [shellcheck]
 39 .github/workflows/reusable-deploy-ecr.yml	shellcheck reported issue in this script: SC2086:info: Double quote to prevent globbing and word splitting [shellcheck]
 2 .github/workflows/reusable-deploy-ecr.yml	shellcheck reported issue in this script: SC2129:style: Consider using { cmd1; cmd2; } >> file instead of individual redirects [shellcheck]
-30 .github/workflows/reusable-ecs-codedeploy.yml	shellcheck reported issue in this script: SC2086:info: Double quote to prevent globbing and word splitting [shellcheck]
+28 .github/workflows/reusable-ecs-codedeploy.yml	shellcheck reported issue in this script: SC2086:info: Double quote to prevent globbing and word splitting [shellcheck]
 2 .github/workflows/reusable-ecs-codedeploy.yml	shellcheck reported issue in this script: SC2129:style: Consider using { cmd1; cmd2; } >> file instead of individual redirects [shellcheck]
 2 .github/workflows/reusable-npm-publish.yml	shellcheck reported issue in this script: SC2046:warning: Quote this to prevent word splitting [shellcheck]
 11 .github/workflows/reusable-npm-publish.yml	shellcheck reported issue in this script: SC2086:info: Double quote to prevent globbing and word splitting [shellcheck]
