@@ -1,0 +1,260 @@
+name: ECS Rolling Update
+
+# INVEST-005/EPIC-007/FEATURE-002/US-004 — deploys an ECS service by a rolling update, no CodeDeploy.
+#
+# Used for a service that is not behind a blue/green deployment group: WebStudio42's staging
+# service (`render-staging`). `reusable-service-deployment.yml` calls it before the CodeDeploy job,
+# so the same image is tried on staging first and production starts only when this job succeeded.
+#
+# **What "succeeded" means here.** `aws ecs wait services-stable` alone is not enough: when the
+# service has the deployment circuit breaker with rollback, ECS answers a broken image by rolling
+# back to the last working task definition — and the service is then *stable*, on the old version.
+# The wait comes back green and the pipeline would go on to production. So the job asks the
+# question a person actually has: did the service take the task definition this run registered,
+# and does ECS call the rollout COMPLETED? Anything else fails the job.
+#
+# Mirrors `reusable-ecs-codedeploy.yml` (same task-definition handling, same wording where it
+# applies) so the two read alike.
+
+on:
+  workflow_call:
+    inputs:
+      cluster_name:
+        description: 'ECS cluster name'
+        required: true
+        type: string
+      service_name:
+        description: 'ECS service name'
+        required: true
+        type: string
+      task_family:
+        description: 'ECS task definition family (its latest revision is the base of the new one)'
+        required: true
+        type: string
+      container_name:
+        description: 'Container name in task definition'
+        required: true
+        type: string
+      ecr_repository:
+        description: 'ECR repository name'
+        required: true
+        type: string
+      image_tag:
+        description: 'Docker image tag'
+        required: true
+        type: string
+      aws_region:
+        description: 'AWS region'
+        required: false
+        type: string
+        default: 'eu-central-1'
+    secrets:
+      AWS_ROLE_ARN:
+        description: 'AWS IAM Role ARN for OIDC authentication'
+        required: true
+    outputs:
+      task_definition_arn:
+        description: 'New task definition ARN'
+        value: ${{ jobs.deploy.outputs.task_def_arn }}
+
+permissions:
+  id-token: write    # Required for OIDC
+  contents: read
+
+jobs:
+  deploy:
+    name: Rolling update of the ECS service
+    runs-on: ubuntu-latest
+    outputs:
+      task_def_arn: ${{ steps.register-taskdef.outputs.task_def_arn }}
+    env:
+      CLUSTER: ${{ inputs.cluster_name }}
+      SERVICE: ${{ inputs.service_name }}
+      FAMILY: ${{ inputs.task_family }}
+      CONTAINER: ${{ inputs.container_name }}
+      ECR_REPOSITORY: ${{ inputs.ecr_repository }}
+      IMAGE_TAG: ${{ inputs.image_tag }}
+      AWS_REGION_INPUT: ${{ inputs.aws_region }}
+
+    steps:
+      # A caller that sets the staging service but forgets the family would otherwise fail much later
+      # with an empty `--task-definition ''` and a CLI message that names neither input.
+      - name: 🔎 Check the inputs
+        run: |
+          missing=0
+          for NAME in CLUSTER SERVICE FAMILY CONTAINER ECR_REPOSITORY IMAGE_TAG; do
+            if [ -z "${!NAME}" ]; then
+              echo "::error::The input for ${NAME} is empty (cluster_name, service_name, task_family, container_name, ecr_repository, image_tag must all be set)."
+              missing=1
+            fi
+          done
+          exit "${missing}"
+
+      - name: 🔐 Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ inputs.aws_region }}
+          role-session-name: GitHubActions-ECS-Rolling
+
+      - name: 📦 Download current Task Definition
+        run: |
+          echo "Downloading Task Definition: ${FAMILY}"
+          aws ecs describe-task-definition \
+            --task-definition "${FAMILY}" \
+            --query 'taskDefinition' > task-def.json
+
+          echo "Current Task Definition:"
+          jq -r '.family + ":" + (.revision|tostring)' task-def.json
+
+      - name: 🏗️ Build ECR image URI
+        id: build-image-uri
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          ECR_URI="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION_INPUT}.amazonaws.com/${ECR_REPOSITORY}:${IMAGE_TAG}"
+          echo "image_uri=${ECR_URI}" >> "${GITHUB_OUTPUT}"
+          echo "ECR Image: ${ECR_URI}"
+
+      - name: 🔄 Update Task Definition with new image
+        env:
+          IMAGE_URI: ${{ steps.build-image-uri.outputs.image_uri }}
+        run: |
+          echo "Updating container image to: ${IMAGE_URI}"
+
+          # Update image for the named container; a missing container is a mistake, not a no-op.
+          jq --arg IMAGE "${IMAGE_URI}" \
+             --arg CONTAINER "${CONTAINER}" \
+             'if any(.containerDefinitions[]; .name == $CONTAINER)
+              then (.containerDefinitions[] | select(.name == $CONTAINER) | .image) = $IMAGE
+              else error("container " + $CONTAINER + " not found in the task definition") end' \
+             task-def.json > updated-task-def.json
+
+          # Remove read-only fields
+          jq 'del(
+            .taskDefinitionArn,
+            .revision,
+            .status,
+            .requiresAttributes,
+            .compatibilities,
+            .registeredAt,
+            .registeredBy
+          )' updated-task-def.json > new-task-def.json
+
+      - name: 📝 Register new Task Definition
+        id: register-taskdef
+        run: |
+          TASK_DEF_ARN=$(aws ecs register-task-definition \
+            --cli-input-json file://new-task-def.json \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)
+
+          echo "task_def_arn=${TASK_DEF_ARN}" >> "${GITHUB_OUTPUT}"
+          echo "✅ Registered: ${TASK_DEF_ARN}"
+
+      - name: 🚀 Start the rolling update
+        env:
+          TASK_DEF_ARN: ${{ steps.register-taskdef.outputs.task_def_arn }}
+        run: |
+          aws ecs update-service \
+            --cluster "${CLUSTER}" \
+            --service "${SERVICE}" \
+            --task-definition "${TASK_DEF_ARN}" \
+            --query "service.deployments[?status=='PRIMARY'] | [0].id" \
+            --output text
+          echo "✅ Rolling update started on ${SERVICE}"
+
+      # `aws ecs wait services-stable` polls every 15 seconds, 40 times — about 10 minutes. A
+      # service that is not stable by then needs a person; the job fails instead of waiting longer.
+      - name: ⏱️ Wait for the service to be stable
+        id: wait-stable
+        continue-on-error: true  # The confirm step and the fail step below decide the job's fate
+        run: |
+          # The CLI exits 255 both when the wait runs out and when the call itself fails (no
+          # permission, wrong service name, throttling) — so its own message is printed, not guessed.
+          if WAIT_OUTPUT=$(aws ecs wait services-stable --cluster "${CLUSTER}" --services "${SERVICE}" 2>&1); then
+            echo "status=stable" >> "${GITHUB_OUTPUT}"
+          else
+            echo "::error::${SERVICE} did not become stable: the wait ran out (about 10 minutes) or the call failed. Message of the AWS CLI:"
+            echo "${WAIT_OUTPUT}"
+            echo "status=error" >> "${GITHUB_OUTPUT}"
+          fi
+
+      # **Did the deployment actually take?** Stable is not enough (see the header): after a circuit
+      # breaker rollback the service is stable on the old task definition.
+      #
+      # The rollout state is polled for up to a minute while it still says IN_PROGRESS for the task
+      # definition this run registered: `services-stable` can return a moment before ECS marks the
+      # deployment COMPLETED, and a healthy rollout must not fail on that gap.
+      - name: 🔍 Confirm the rollout and the running task definition
+        id: confirm
+        if: steps.wait-stable.outputs.status == 'stable'
+        env:
+          EXPECTED_TASK_DEF: ${{ steps.register-taskdef.outputs.task_def_arn }}
+          EXPECTED_IMAGE: ${{ steps.build-image-uri.outputs.image_uri }}
+          POLL_SECONDS: '5'
+          MAX_POLLS: '12'
+        run: |
+          echo "expected task def: ${EXPECTED_TASK_DEF}"
+          echo "expected image:    ${EXPECTED_IMAGE}"
+
+          POLLS=0
+          while :; do
+            ROLLOUT_STATE=$(aws ecs describe-services \
+              --cluster "${CLUSTER}" --services "${SERVICE}" \
+              --query "services[0].deployments[?status=='PRIMARY'] | [0].rolloutState" --output text)
+            RUNNING_TASK_DEF=$(aws ecs describe-services \
+              --cluster "${CLUSTER}" --services "${SERVICE}" \
+              --query 'services[0].taskDefinition' --output text)
+
+            echo "rollout state: ${ROLLOUT_STATE}, running task def: ${RUNNING_TASK_DEF}"
+
+            if [ "${ROLLOUT_STATE}" = "COMPLETED" ] && [ "${RUNNING_TASK_DEF}" = "${EXPECTED_TASK_DEF}" ]; then
+              echo "✅ ${SERVICE} runs the task definition this run registered."
+              echo "status=success" >> "${GITHUB_OUTPUT}"
+              exit 0
+            fi
+
+            # Only "still rolling out our task definition" is worth waiting for; anything else is decided.
+            if [ "${ROLLOUT_STATE}" != "IN_PROGRESS" ] || [ "${RUNNING_TASK_DEF}" != "${EXPECTED_TASK_DEF}" ] || [ "${POLLS}" -ge "${MAX_POLLS}" ]; then
+              break
+            fi
+            POLLS=$((POLLS + 1))
+            sleep "${POLL_SECONDS}"
+          done
+
+          echo "::error::${SERVICE} is stable but did not take the new task definition (rollout state ${ROLLOUT_STATE})."
+          echo "The deployment circuit breaker has most likely rolled it back to the last working"
+          echo "revision because the new tasks could not start. See the service events and the logs."
+          echo "status=error" >> "${GITHUB_OUTPUT}"
+
+      - name: 📊 Display Deployment Summary
+        if: always()
+        env:
+          TASK_DEF_ARN: ${{ steps.register-taskdef.outputs.task_def_arn }}
+          WAIT_STATUS: ${{ steps.wait-stable.outputs.status }}
+          CONFIRM_STATUS: ${{ steps.confirm.outputs.status }}
+        run: |
+          {
+            echo "### ECS Rolling Update Summary 🚀"
+            echo ""
+            echo "**Service:** \`${SERVICE}\`"
+            echo "**Cluster:** \`${CLUSTER}\`"
+            echo "**Image:** \`${ECR_REPOSITORY}:${IMAGE_TAG}\`"
+            echo "**Task Definition:** \`${TASK_DEF_ARN}\`"
+            echo ""
+            if [ "${CONFIRM_STATUS}" = "success" ]; then
+              echo "**Status:** 🟢 Rolled out and confirmed"
+            elif [ "${WAIT_STATUS}" = "stable" ]; then
+              echo "**Status:** ❌ Stable, but the new task definition is not running (rolled back)"
+            elif [ "${WAIT_STATUS}" = "error" ]; then
+              echo "**Status:** ❌ Not stable within the wait"
+            else
+              echo "**Status:** ❌ Failed before the rolling update finished — see the logs"
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: ✅ Fail unless the rollout is confirmed
+        if: steps.confirm.outputs.status != 'success'
+        run: |
+          echo "❌ The rolling update of ${SERVICE} is not confirmed — failing so that nothing depending on this job (the production deployment) starts."
+          exit 1

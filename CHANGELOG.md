@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **reusable-ecs-rolling.yml** — deploys an ECS service by a rolling update (INVEST-005/EPIC-007/FEATURE-002/US-004)
+  - Registers a new task definition from the latest revision of the family, waits until the service is stable, and
+    confirms that the rollout is `COMPLETED` and the new task definition is the one running. A rollback by the ECS
+    deployment circuit breaker fails the job.
+- **reusable-service-deployment.yml** — optional inputs `staging_ecs_service_name` and `staging_task_family`
+  - A new job `deploy-staging` runs before `deploy-ecs`; `deploy-ecs` starts only when it succeeded or was skipped.
+  - Both inputs default to `''`: without them the job is skipped and a service deploys exactly as before.
+
 ## [2.1.0] - 2026-04-22
 
 ### Added

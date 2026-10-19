@@ -119,6 +119,22 @@ on:
         required: false
         type: string
         default: 'CodeDeployDefault.ECSLinear10PercentEvery1Minutes'
+
+      # Staging service (INVEST-005/EPIC-007/FEATURE-002/US-004). **Both empty = no staging job**,
+      # and the service deploys exactly as before; this workflow is shared by every service.
+      staging_ecs_service_name:
+        description: >
+          ECS service that is deployed by a rolling update BEFORE the CodeDeploy job (for example
+          render-staging). Empty = no staging deployment. A failed staging deployment stops the
+          pipeline before the CodeDeploy job.
+        required: false
+        type: string
+        default: ''
+      staging_task_family:
+        description: 'ECS task definition family of the staging service. Required when staging_ecs_service_name is set.'
+        required: false
+        type: string
+        default: ''
     
     secrets:
       AWS_ROLE_ARN:
@@ -241,17 +257,51 @@ jobs:
       AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
 
   # ============================================================================
-  # JOB 5: ECS CodeDeploy Blue/Green
+  # JOB 5a: ECS Rolling Update of the staging service (optional)
+  # ============================================================================
+  # INVEST-005/EPIC-007/FEATURE-002/US-004 — the same image goes to staging first. Skipped unless
+  # `staging_ecs_service_name` is set, so no other service notices that this job exists.
+  # Same preconditions as `deploy-ecs`, plus the input.
+  deploy-staging:
+    name: Deploy to staging
+    needs: [release-ecr, deploy-infrastructure, bootstrap-secrets, seed-database]
+    if: |
+      always() &&
+      inputs.staging_ecs_service_name != '' &&
+      needs.release-ecr.result == 'success' &&
+      needs.release-ecr.outputs.has_release == 'true' &&
+      (needs.deploy-infrastructure.result == 'success' ||
+       needs.deploy-infrastructure.result == 'skipped') &&
+      (needs.bootstrap-secrets.result == 'success' ||
+       needs.bootstrap-secrets.result == 'skipped') &&
+      (needs.seed-database.result == 'success' ||
+       needs.seed-database.result == 'skipped')
+    uses: ./.github/workflows/reusable-ecs-rolling.yml
+    with:
+      cluster_name: ${{ inputs.cluster_name }}
+      service_name: ${{ inputs.staging_ecs_service_name }}
+      task_family: ${{ inputs.staging_task_family }}
+      container_name: ${{ inputs.container_name }}
+      ecr_repository: ${{ inputs.ecr_repository }}
+      image_tag: ${{ needs.release-ecr.outputs.version }}
+      aws_region: ${{ inputs.aws_region }}
+    secrets:
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+
+  # ============================================================================
+  # JOB 5b: ECS CodeDeploy Blue/Green
   # ============================================================================
   deploy-ecs:
     name: Deploy to ECS
-    needs: [release-ecr, deploy-infrastructure, bootstrap-secrets, seed-database]
+    needs: [release-ecr, deploy-infrastructure, bootstrap-secrets, seed-database, deploy-staging]
     # Complex conditional:
     # - Run even if previous jobs failed (always())
     # - But only if release succeeded
     # - And release created something
     # - And infrastructure either succeeded or was skipped
     # - And bootstrap either succeeded or was skipped
+    # - And staging either succeeded or was skipped (skipped = the service has no staging job).
+    #   `always()` above also lets this job run after a FAILED staging job unless that is said here.
     if: |
       always() && 
       needs.release-ecr.result == 'success' &&
@@ -261,7 +311,9 @@ jobs:
       (needs.bootstrap-secrets.result == 'success' ||
        needs.bootstrap-secrets.result == 'skipped') &&
       (needs.seed-database.result == 'success' ||
-       needs.seed-database.result == 'skipped')
+       needs.seed-database.result == 'skipped') &&
+      (needs.deploy-staging.result == 'success' ||
+       needs.deploy-staging.result == 'skipped')
     uses: ./.github/workflows/reusable-ecs-codedeploy.yml
     with:
       cluster_name: ${{ inputs.cluster_name }}

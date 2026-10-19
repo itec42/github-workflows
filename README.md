@@ -21,6 +21,7 @@ github-workflows/
 │   ├── reusable-terraform-check.yml        # Terraform fmt + validate, on the pull request
 │   ├── reusable-terraform-deploy.yml       # Infrastructure deployment
 │   ├── reusable-ecs-codedeploy.yml         # ECS Blue/Green via CodeDeploy
+│   ├── reusable-ecs-rolling.yml            # ECS rolling update (staging service)
 │   └── reusable-service-deployment.yml     # Master orchestration
 ├── shared/
 │   ├── .release-it.json                    # Release-it configuration
@@ -234,6 +235,15 @@ uses: ivodenwag/github-workflows/.github/workflows/reusable-service-deployment.y
 
 ---
 
+### 4. ECS Rolling Update (`reusable-ecs-rolling.yml`)
+
+Deploys one ECS service by a rolling update: latest task definition of the family → new image → register →
+`update-service` → wait until stable → confirm rollout `COMPLETED` and the new task definition running.
+
+**Inputs:** `cluster_name`, `service_name`, `task_family`, `container_name`, `ecr_repository`, `image_tag`, `aws_region`
+
+**Output:** `task_definition_arn`
+
 ### 5. Master Orchestration (`reusable-service-deployment.yml`)
 
 Chains all workflows for complete deployment pipeline.
@@ -247,7 +257,14 @@ Chains all workflows for complete deployment pipeline.
 **Jobs:**
 1. `release-ecr` - Create version + push to ECR
 2. `deploy-infrastructure` - Terraform (optional, skip with `skip_terraform: true`)
-3. `deploy-ecs` - CodeDeploy Blue/Green
+3. `deploy-staging` - Rolling update of a staging service (optional, only when `staging_ecs_service_name` is set), see below
+4. `deploy-ecs` - CodeDeploy Blue/Green; starts only when staging succeeded or was skipped
+
+**Optional staging job** (`staging_ecs_service_name`, `staging_task_family`; both empty by default = no staging job, the
+service deploys as before): the same image is deployed first to a second ECS service by a rolling update
+(`reusable-ecs-rolling.yml`). The job waits until the service is stable **and** confirms that it runs the task definition
+this run registered (a rollback by the ECS circuit breaker leaves the service stable on the old version, which fails the
+job). A failed staging job stops the pipeline before the CodeDeploy job.
 
 **Features:**
 - Conditional execution

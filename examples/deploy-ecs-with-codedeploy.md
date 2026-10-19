@@ -289,6 +289,40 @@ resource "aws_ecs_task_definition" "identity" {
 | `compose_files` | Docker compose files | `docker-compose.yml docker-compose.ci.yml` |
 | `terraform_version` | Terraform version | `1.7.0` |
 | `aws_region` | AWS region | `eu-central-1` |
+| `staging_ecs_service_name` | ECS service deployed by a rolling update **before** production (empty = no staging job) | `` |
+| `staging_task_family` | Task definition family of that staging service | `` |
+
+---
+
+## 🧪 Staging service before production (optional)
+
+A service that runs a second, non-CodeDeploy ECS service for staging (for example `render` with `render-staging`) can
+have the pipeline deploy it first. Set both inputs; leave them out and nothing changes.
+
+```yaml
+jobs:
+  deploy:
+    uses: tec42/github-workflows/.github/workflows/reusable-service-deployment.yml@main
+    with:
+      service_name: render
+      ecr_repository: render
+      cluster_name: tec42-cluster-production
+      ecs_service_name: render-production        # production: CodeDeploy Blue/Green
+      task_family: render-production
+      staging_ecs_service_name: render-staging   # staging: rolling update, deployed first
+      staging_task_family: render-staging
+      codedeploy_application: render-production-codedeploy-app
+      codedeploy_deployment_group: render-production-deployment-group
+```
+
+How it behaves:
+
+- The same image tag (from `release-ecr`) goes to both services.
+- `deploy-staging` waits until the staging service is stable and confirms that it runs the new task definition. Give the
+  staging service the **deployment circuit breaker with rollback**: a broken image is then rolled back by ECS, and the job
+  reports it as a failure.
+- A failed `deploy-staging` skips `deploy-ecs`: production does not start.
+- Staging is the extra time of one rolling update (typically 2–5 minutes) per deployment.
 
 ---
 

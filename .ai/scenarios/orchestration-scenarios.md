@@ -238,3 +238,53 @@ Push with "chore: update readme"
 
 - Commit without `feat:`/`fix:` → No deployment
 - Commit with `feat:` → Full deployment
+
+---
+
+## Scenario 4: Staging Service Before Production (INVEST-005/EPIC-007/FEATURE-002/US-004)
+
+### Description
+
+A service with a second ECS service for staging deploys that service by a rolling update first and the production
+service by CodeDeploy only after staging succeeded.
+
+### User Story
+
+As a developer, I want the pipeline to deploy the same image first to staging and then to production, so that a change is
+tried on staging before customers see it.
+
+### Inputs
+
+```yaml
+staging_ecs_service_name: 'render-staging'   # empty (default) = no staging job
+staging_task_family: 'render-staging'
+```
+
+### Flow
+
+```
+release-ecr → deploy-infrastructure → (bootstrap, seed) → deploy-staging → deploy-ecs
+                                                              │ fails
+                                                              └──→ deploy-ecs is skipped
+```
+
+### Behavior (truth table for `deploy-ecs`)
+
+| `staging_ecs_service_name` | `deploy-staging` | `deploy-ecs` |
+|---|---|---|
+| empty | skipped | runs as before (the other conditions unchanged) |
+| set | success | runs |
+| set | failure | skipped |
+| set | skipped because an earlier job failed | skipped (the earlier failure already blocks it) |
+
+### Test Scenarios
+
+#### ✅ Expected Behavior
+
+- Inputs empty → pipeline identical to before
+- Staging confirmed → production deployed with the same image tag
+
+#### ❌ Error Cases
+
+- Staging not stable in about 10 minutes → job fails, production skipped
+- Staging rolled back by the circuit breaker (stable on the old task definition) → job fails, production skipped
