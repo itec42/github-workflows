@@ -77,6 +77,19 @@ jobs:
       AWS_REGION_INPUT: ${{ inputs.aws_region }}
 
     steps:
+      # A caller that sets the staging service but forgets the family would otherwise fail much later
+      # with an empty `--task-definition ''` and a CLI message that names neither input.
+      - name: 🔎 Check the inputs
+        run: |
+          missing=0
+          for NAME in CLUSTER SERVICE FAMILY CONTAINER ECR_REPOSITORY IMAGE_TAG; do
+            if [ -z "${!NAME}" ]; then
+              echo "::error::The input for ${NAME} is empty (cluster_name, service_name, task_family, container_name, ecr_repository, image_tag must all be set)."
+              missing=1
+            fi
+          done
+          exit "${missing}"
+
       - name: 🔐 Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -156,44 +169,58 @@ jobs:
         id: wait-stable
         continue-on-error: true  # The confirm step and the fail step below decide the job's fate
         run: |
-          if aws ecs wait services-stable --cluster "${CLUSTER}" --services "${SERVICE}"; then
+          # The CLI exits 255 both when the wait runs out and when the call itself fails (no
+          # permission, wrong service name, throttling) — so its own message is printed, not guessed.
+          if WAIT_OUTPUT=$(aws ecs wait services-stable --cluster "${CLUSTER}" --services "${SERVICE}" 2>&1); then
             echo "status=stable" >> "${GITHUB_OUTPUT}"
           else
-            echo "::error::${SERVICE} did not become stable within the wait (about 10 minutes)."
+            echo "::error::${SERVICE} did not become stable: the wait ran out (about 10 minutes) or the call failed. Message of the AWS CLI:"
+            echo "${WAIT_OUTPUT}"
             echo "status=error" >> "${GITHUB_OUTPUT}"
           fi
 
       # **Did the deployment actually take?** Stable is not enough (see the header): after a circuit
       # breaker rollback the service is stable on the old task definition.
+      #
+      # The rollout state is polled for up to a minute while it still says IN_PROGRESS for the task
+      # definition this run registered: `services-stable` can return a moment before ECS marks the
+      # deployment COMPLETED, and a healthy rollout must not fail on that gap.
       - name: 🔍 Confirm the rollout and the running task definition
         id: confirm
         if: steps.wait-stable.outputs.status == 'stable'
         env:
           EXPECTED_TASK_DEF: ${{ steps.register-taskdef.outputs.task_def_arn }}
           EXPECTED_IMAGE: ${{ steps.build-image-uri.outputs.image_uri }}
+          POLL_SECONDS: '5'
+          MAX_POLLS: '12'
         run: |
-          ROLLOUT_STATE=$(aws ecs describe-services \
-            --cluster "${CLUSTER}" --services "${SERVICE}" \
-            --query "services[0].deployments[?status=='PRIMARY'] | [0].rolloutState" --output text)
-          RUNNING_TASK_DEF=$(aws ecs describe-services \
-            --cluster "${CLUSTER}" --services "${SERVICE}" \
-            --query 'services[0].taskDefinition' --output text)
-          RUNNING_IMAGE=$(aws ecs describe-task-definition \
-            --task-definition "${RUNNING_TASK_DEF}" \
-            --query "taskDefinition.containerDefinitions[?name=='${CONTAINER}'].image | [0]" \
-            --output text)
+          echo "expected task def: ${EXPECTED_TASK_DEF}"
+          echo "expected image:    ${EXPECTED_IMAGE}"
 
-          echo "rollout state:        ${ROLLOUT_STATE}"
-          echo "expected task def:    ${EXPECTED_TASK_DEF}"
-          echo "running task def:     ${RUNNING_TASK_DEF}"
-          echo "expected image:       ${EXPECTED_IMAGE}"
-          echo "running image:        ${RUNNING_IMAGE}"
+          POLLS=0
+          while :; do
+            ROLLOUT_STATE=$(aws ecs describe-services \
+              --cluster "${CLUSTER}" --services "${SERVICE}" \
+              --query "services[0].deployments[?status=='PRIMARY'] | [0].rolloutState" --output text)
+            RUNNING_TASK_DEF=$(aws ecs describe-services \
+              --cluster "${CLUSTER}" --services "${SERVICE}" \
+              --query 'services[0].taskDefinition' --output text)
 
-          if [ "${ROLLOUT_STATE}" = "COMPLETED" ] && [ "${RUNNING_TASK_DEF}" = "${EXPECTED_TASK_DEF}" ]; then
-            echo "✅ ${SERVICE} runs the task definition this run registered."
-            echo "status=success" >> "${GITHUB_OUTPUT}"
-            exit 0
-          fi
+            echo "rollout state: ${ROLLOUT_STATE}, running task def: ${RUNNING_TASK_DEF}"
+
+            if [ "${ROLLOUT_STATE}" = "COMPLETED" ] && [ "${RUNNING_TASK_DEF}" = "${EXPECTED_TASK_DEF}" ]; then
+              echo "✅ ${SERVICE} runs the task definition this run registered."
+              echo "status=success" >> "${GITHUB_OUTPUT}"
+              exit 0
+            fi
+
+            # Only "still rolling out our task definition" is worth waiting for; anything else is decided.
+            if [ "${ROLLOUT_STATE}" != "IN_PROGRESS" ] || [ "${RUNNING_TASK_DEF}" != "${EXPECTED_TASK_DEF}" ] || [ "${POLLS}" -ge "${MAX_POLLS}" ]; then
+              break
+            fi
+            POLLS=$((POLLS + 1))
+            sleep "${POLL_SECONDS}"
+          done
 
           echo "::error::${SERVICE} is stable but did not take the new task definition (rollout state ${ROLLOUT_STATE})."
           echo "The deployment circuit breaker has most likely rolled it back to the last working"
