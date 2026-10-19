@@ -120,7 +120,8 @@ Each workflow does ONE thing:
 | `reusable-ci-docker.yml` | Run tests | `service_name` | pass/fail |
 | `reusable-release-ecr.yml` | Release + push | `service_name`, `ecr_repository` | `version` |
 | `reusable-terraform-deploy.yml` | Apply terraform | `terraform_dir` | `terraform_outputs` |
-| `reusable-ecs-codedeploy.yml` | Deploy to ECS | `cluster_name`, `image_tag` | `deployment_id` |
+| `reusable-ecs-codedeploy.yml` | Deploy to ECS (Blue/Green) | `cluster_name`, `image_tag` | `deployment_id` |
+| `reusable-ecs-rolling.yml` | Deploy to ECS (rolling update, staging) | `cluster_name`, `service_name`, `image_tag` | `task_definition_arn` |
 
 ### Pattern 2: Orchestration
 
