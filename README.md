@@ -152,7 +152,7 @@ Deploys infrastructure via Terraform.
 
 **Inputs:**
 - `terraform_dir` - Path to terraform directory (default: `terraform`)
-- `terraform_version` - Terraform version (default: `1.7.0`)
+- `terraform_version` - Terraform version (default: `1.16.6`)
 - `aws_region` - AWS region (default: `eu-central-1`)
 
 **Secrets:**

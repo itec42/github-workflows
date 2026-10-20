@@ -12,7 +12,7 @@ on:
         description: 'Terraform version'
         required: false
         type: string
-        default: '1.12.0'
+        default: '1.16.6'
       aws_region:
         description: 'AWS region'
         required: false
