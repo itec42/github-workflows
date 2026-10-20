@@ -29,7 +29,7 @@ As a DevOps engineer, I want automated Terraform deployments, so that infrastruc
 
 ```yaml
 terraform_dir: 'terraform'
-terraform_version: '1.7.0'
+terraform_version: '1.16.6'
 aws_region: 'eu-central-1'
 ```
 
@@ -56,7 +56,7 @@ jobs:
     uses: ivodenwag/github-workflows/.github/workflows/reusable-terraform-deploy.yml@v2.0.0
     with:
       terraform_dir: terraform
-      terraform_version: '1.7.0'
+      terraform_version: '1.16.6'
     secrets:
       AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
 ```
@@ -144,7 +144,7 @@ jobs:
       
       - uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: '1.7.0'
+          terraform_version: '1.16.6'
       
       - run: |
           cd terraform

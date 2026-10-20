@@ -287,7 +287,7 @@ resource "aws_ecs_task_definition" "identity" {
 | `terraform_dir` | Terraform directory | `terraform` |
 | `appspec_path` | Path to appspec.yaml | `terraform/appspec.yaml` |
 | `compose_files` | Docker compose files | `docker-compose.yml docker-compose.ci.yml` |
-| `terraform_version` | Terraform version | `1.7.0` |
+| `terraform_version` | Terraform version | `1.16.6` |
 | `aws_region` | AWS region | `eu-central-1` |
 | `staging_ecs_service_name` | ECS service deployed by a rolling update **before** production (empty = no staging job) | `` |
 | `staging_task_family` | Task definition family of that staging service | `` |

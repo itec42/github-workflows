@@ -14,7 +14,7 @@
 | Bash | 5.x | Script execution |
 | Docker | 24.x | Container builds |
 | AWS CLI | 2.x | AWS interactions |
-| Terraform | 1.7.0 | Infrastructure deployment |
+| Terraform | 1.16.6 | Infrastructure deployment |
 
 ---
 
