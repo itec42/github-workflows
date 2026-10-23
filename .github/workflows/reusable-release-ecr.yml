@@ -136,7 +136,7 @@ jobs:
       - name: 📥 Download shared release config
         run: |
           curl -sL -H 'Cache-Control: no-cache' -o .release-it.json \
-            "https://raw.githubusercontent.com/tec42/github-workflows/main/shared/.release-it.json?$(date +%s)"
+            "https://raw.githubusercontent.com/itec42/github-workflows/main/shared/.release-it.json?$(date +%s)"
           echo "✅ Downloaded shared release-it config"
           cat .release-it.json
 

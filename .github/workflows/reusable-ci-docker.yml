@@ -65,12 +65,12 @@ jobs:
       - name: 📥 Checkout
         uses: actions/checkout@v4
 
-      # tec42/github-workflows is public, so this needs no token. `main` on purpose: every caller uses
+      # itec42/github-workflows is public, so this needs no token. `main` on purpose: every caller uses
       # this workflow @main, and the check should be the one main carries.
       - name: 📥 Checkout the shared checks
         uses: actions/checkout@v4
         with:
-          repository: tec42/github-workflows
+          repository: itec42/github-workflows
           ref: main
           path: .ci-shared
 
