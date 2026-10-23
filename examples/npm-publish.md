@@ -96,7 +96,7 @@ permissions:
 
 jobs:
   release:
-    uses: tec42/github-workflows/.github/workflows/reusable-npm-publish.yml@main
+    uses: itec42/github-workflows/.github/workflows/reusable-npm-publish.yml@main
     with:
       service_name: your-package
       dry_run: ${{ inputs.dry_run }}
@@ -158,7 +158,7 @@ Never test against `main`. Reference the branch from a consuming repository and 
 ```yaml
 jobs:
   release:
-    uses: tec42/github-workflows/.github/workflows/reusable-npm-publish.yml@feature/your-branch
+    uses: itec42/github-workflows/.github/workflows/reusable-npm-publish.yml@feature/your-branch
     with:
       service_name: your-package
       pre_release: rc

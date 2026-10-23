@@ -302,7 +302,7 @@ have the pipeline deploy it first. Set both inputs; leave them out and nothing c
 ```yaml
 jobs:
   deploy:
-    uses: tec42/github-workflows/.github/workflows/reusable-service-deployment.yml@main
+    uses: itec42/github-workflows/.github/workflows/reusable-service-deployment.yml@main
     with:
       service_name: render
       ecr_repository: render
