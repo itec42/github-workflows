@@ -111,3 +111,16 @@ jobs:
 
       - name: 🧪 A repository with no Terraform must not fail
         run: bash tests/run-terraform-present.sh
+
+  # The self-test of shared/resolve-pair-branch.sh (INVEST-005/EPIC-011/FEATURE-009/US-010): the
+  # branch name of a pull request is untrusted input, so the cases include names a shell would act
+  # on. Runnable anywhere: bash tests/run-resolve-pair-branch.sh.
+  resolve-pair-branch:
+    name: shared/resolve-pair-branch.sh
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🧪 The pairing picks the branch of the same name, else main, and runs nothing hostile
+        run: bash tests/run-resolve-pair-branch.sh
