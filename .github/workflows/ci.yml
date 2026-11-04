@@ -46,7 +46,19 @@ jobs:
       # read as a new finding.
       - name: 🔍 actionlint against the committed baseline
         run: |
-          docker run --rm -v "$PWD":/repo -w /repo rhysd/actionlint:latest -oneline > raw.txt 2>&1 || true
+          # **Only stdout holds findings.** The runner has no cached image, so `docker run` would pull
+          # it and write "Pulling fs layer" and the like to stderr; with `2>&1` those lines were
+          # counted as findings and the job was red on every run. The image is pulled quietly first,
+          # and stderr goes to its own file. actionlint exits 1 when it finds something (expected,
+          # compared below) and 2 or more when it could not run at all (a real failure).
+          docker pull --quiet rhysd/actionlint:latest > /dev/null
+          rc=0
+          docker run --rm -v "$PWD":/repo -w /repo rhysd/actionlint:latest -oneline > raw.txt 2> actionlint.err || rc=$?
+          if [ "$rc" -gt 1 ]; then
+            echo "::error::actionlint did not run (exit $rc)."
+            cat actionlint.err
+            exit 1
+          fi
 
           sed -E 's/^([^:]+):[0-9]+:[0-9]+: (.*)$/\1\t\2/' raw.txt \
             | sed -E 's/:[0-9]+:[0-9]+:/:/g' \
@@ -111,3 +123,16 @@ jobs:
 
       - name: 🧪 A repository with no Terraform must not fail
         run: bash tests/run-terraform-present.sh
+
+  # The self-test of shared/resolve-pair-branch.sh (INVEST-005/EPIC-011/FEATURE-009/US-010): the
+  # branch name of a pull request is untrusted input, so the cases include names a shell would act
+  # on. Runnable anywhere: bash tests/run-resolve-pair-branch.sh.
+  resolve-pair-branch:
+    name: shared/resolve-pair-branch.sh
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🧪 The pairing picks the branch of the same name, else main, and runs nothing hostile
+        run: bash tests/run-resolve-pair-branch.sh

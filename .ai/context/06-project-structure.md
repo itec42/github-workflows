@@ -44,6 +44,7 @@ Reusable workflow definitions.
 | `reusable-terraform-deploy.yml` | Apply Terraform | `terraform_dir` | `terraform_outputs` |
 | `reusable-ecs-codedeploy.yml` | Deploy to ECS | `cluster_name`, `image_tag`, ... | `deployment_id` |
 | `reusable-service-deployment.yml` | Chain all workflows | 13 inputs | — |
+| `reusable-cross-repo-contract-check.yml` | Check a contract file against another repo on the branch of the same name, else `main` | `contract_name`, `other_repo`, `make_target`, ... | — |
 
 ### `shared/`
 
@@ -52,6 +53,7 @@ Shared configuration files downloaded by workflows.
 | File | Purpose |
 |------|---------|
 | `.release-it.json` | Semantic versioning config |
+| `resolve-pair-branch.sh` | Branch of the other repo to check out: same name, else `main` (self-test: `tests/run-resolve-pair-branch.sh`) |
 
 ### `examples/`
 
@@ -61,6 +63,7 @@ Usage documentation for service teams.
 |------|---------|
 | `deploy-ecr-with-release.md` | How to deploy to ECR |
 | `deploy-ecs-with-codedeploy.md` | Complete deployment guide |
+| `cross-repo-contract-check.md` | Check a contract against another repository |
 
 ---
 

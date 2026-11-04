@@ -139,3 +139,46 @@ jobs:
 
 - **File not found**: `docker-compose.test.yml: No such file or directory`
 - **Invalid YAML**: Parse error at compose file
+
+---
+
+## Scenario 3: Check a Contract Against Another Repository
+
+### Description
+
+Two repositories that share no code agree on a file. The owner writes it, the other keeps a copy. A job per contract family compares them with the other repository checked out beside the calling one.
+
+### User Story
+
+As a developer, I want the other repo checked out on the branch of the same name, so that a red check means a real divergence and not an unfinished merge order.
+
+### Workflow
+
+`reusable-cross-repo-contract-check.yml`
+
+### Inputs
+
+```yaml
+contract_name: 'release manifest'
+other_repo: 'itec42/render'
+make_target: 'contract-check-manifest'
+make_args: 'RENDER_DIR=../render'
+relevant_paths: |
+  app/tests/fixtures/release-manifest.json
+```
+
+### Test Scenarios
+
+#### ✅ Happy Path
+
+- A branch of the same name exists in the other repo: it is checked out
+- No such branch: `main` is checked out and a notice says so; the merge is not blocked
+- No file of the contract changed: the job is green and does nothing
+
+#### ❌ Error Cases
+
+- **Files differ**: the Makefile target fails, the check is red
+- **Pull request from a fork**: the cross checkout and the target are skipped, the job is green
+- **Hostile branch name** (`` `cmd` ``, `$(cmd)`, `;cmd`): plain text, nothing runs (`tests/run-resolve-pair-branch.sh`)
+
+See `examples/cross-repo-contract-check.md`.

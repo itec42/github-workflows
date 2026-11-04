@@ -22,14 +22,17 @@ github-workflows/
 │   ├── reusable-terraform-deploy.yml       # Infrastructure deployment
 │   ├── reusable-ecs-codedeploy.yml         # ECS Blue/Green via CodeDeploy
 │   ├── reusable-ecs-rolling.yml            # ECS rolling update (staging service)
+│   ├── reusable-cross-repo-contract-check.yml # Contract file checked against another repo
 │   └── reusable-service-deployment.yml     # Master orchestration
 ├── shared/
 │   ├── .release-it.json                    # Release-it configuration
 │   ├── check-no-plain-http-internal.sh     # CI guard: HTTPS only between services
+│   ├── resolve-pair-branch.sh              # Branch of the other repo: same name, else main
 │   └── terraform-present.sh                # Is there any Terraform here to check?
 ├── examples/
 │   ├── deploy-ecr-with-release.md
-│   └── deploy-ecs-with-codedeploy.md       # Full deployment guide
+│   ├── deploy-ecs-with-codedeploy.md       # Full deployment guide
+│   └── cross-repo-contract-check.md        # Check a contract against another repository
 ├── README.md
 └── CHANGELOG.md
 ```

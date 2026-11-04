@@ -1,0 +1,186 @@
+# One contract family, checked against the other repository (INVEST-005/EPIC-011/FEATURE-009/US-010).
+#
+# Two repositories that share no code agree on a few files (an example of a manifest, of a delete
+# order, of a document, of the preset trees). The owner writes the file; the other repository keeps
+# a copy. This workflow checks the copy against the owner's file by running one Makefile target of
+# the calling repository with the other repository checked out beside it.
+#
+# **Red must mean a real divergence, not an unfinished merge order.** So the other repository is
+# checked out on the branch of the same name as the pull request's, otherwise on `main`
+# (`shared/resolve-pair-branch.sh`, ADR-060). There is no extra merge gate: a merge order that is
+# not finished is shown as a notice and does not block.
+#
+# **The branch name is chosen by whoever opens the pull request.** It is therefore never written
+# into a shell step: it goes through `env:` into the script, and into the checkout as its `ref:`
+# parameter. The same holds for every other value that comes from the event.
+#
+# **Forks.** A pull request from a fork has no secrets, and its code must not run next to a token:
+# the cross checkout and the Makefile target are skipped; the job is green and says so.
+#
+# **A job that is not relevant stays green and cheap.** The filter is a step, not an
+# `on.pull_request.paths` filter, because a workflow that does not start leaves a required check
+# pending forever. The job always runs; without a change under `relevant_paths` it ends after the
+# first checkout.
+name: Cross-Repo Contract Check
+
+on:
+  workflow_call:
+    inputs:
+      contract_name:
+        description: 'The contract family, as it should read in the summary (for example "release manifest")'
+        required: true
+        type: string
+      other_repo:
+        description: 'The other repository as owner/name (for example itec42/render)'
+        required: true
+        type: string
+      other_repo_dir:
+        description: 'Folder name the other repository is checked out to, beside the calling one'
+        required: false
+        type: string
+        default: 'render'
+      make_target:
+        description: 'The Makefile target of the calling repository that compares the files'
+        required: true
+        type: string
+      make_args:
+        description: 'Extra arguments for make, split on spaces (for example RENDER_DIR=../render)'
+        required: false
+        type: string
+        default: ''
+      relevant_paths:
+        description: 'Paths, one per line: the job does its work only when a pull request changes one of them. Empty means always'
+        required: false
+        type: string
+        default: ''
+      script_ref:
+        description: 'Ref of github-workflows the pairing script is read from. Leave at main; set it to a branch only while testing a branch of this workflow'
+        required: false
+        type: string
+        default: 'main'
+    secrets:
+      cross_repo_token:
+        description: 'Token that can read the other repository'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: ${{ inputs.contract_name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      # Depth 2: on a pull request the checkout is the merge commit, and its first parent is the
+      # base. That is all the relevance check below needs to see what the pull request changed.
+      - name: 📥 Checkout ${{ github.event.repository.name }}
+        uses: actions/checkout@v4
+        with:
+          path: ${{ github.event.repository.name }}
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: 🚦 Fork? Relevant?
+        id: gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          THIS_REPO: ${{ github.repository }}
+          SELF_DIR: ${{ github.event.repository.name }}
+          RELEVANT_PATHS: ${{ inputs.relevant_paths }}
+        run: |
+          fork=false
+          if [[ "$EVENT_NAME" == "pull_request" && "$HEAD_REPO" != "$THIS_REPO" ]]; then
+            fork=true
+            echo "::notice::Pull request from a fork — the cross checkout is skipped."
+          fi
+
+          relevant=true
+          if [[ "$EVENT_NAME" == "pull_request" && -n "$RELEVANT_PATHS" ]]; then
+            paths=()
+            while IFS= read -r line; do
+              [[ -n "$line" ]] && paths+=("$line")
+            done <<< "$RELEVANT_PATHS"
+            if [[ ${#paths[@]} -gt 0 ]] \
+              && [[ -z "$(git -C "$SELF_DIR" diff --name-only HEAD^1 HEAD -- "${paths[@]}")" ]]; then
+              relevant=false
+              echo "::notice::No file of this contract changed — nothing to compare."
+            fi
+          fi
+
+          run=false
+          if [[ "$fork" == "false" && "$relevant" == "true" ]]; then run=true; fi
+
+          {
+            echo "fork=$fork"
+            echo "relevant=$relevant"
+            echo "run=$run"
+          } >> "$GITHUB_OUTPUT"
+
+      # The pairing script lives in this repository, and a reusable workflow does not check out its
+      # own repository (nor can it ask which ref it was called at). So the script is read from
+      # `script_ref`, `main` unless a caller that tests a branch of this workflow says otherwise.
+      # The repository is public.
+      - name: 📥 Checkout the pairing script
+        if: steps.gate.outputs.run == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: itec42/github-workflows
+          ref: ${{ inputs.script_ref }}
+          path: .github-workflows
+          sparse-checkout: shared
+          persist-credentials: false
+
+      - name: 🔗 Which branch of the other repository?
+        id: pair
+        if: steps.gate.outputs.run == 'true'
+        env:
+          HEAD_REF: ${{ github.head_ref || github.ref_name }}
+          OTHER_REPO: ${{ inputs.other_repo }}
+          TOKEN: ${{ secrets.cross_repo_token }}
+        run: bash .github-workflows/shared/resolve-pair-branch.sh
+
+      - name: 📥 Checkout ${{ inputs.other_repo }}
+        if: steps.gate.outputs.run == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.other_repo }}
+          ref: ${{ steps.pair.outputs.ref }}
+          path: ${{ inputs.other_repo_dir }}
+          token: ${{ secrets.cross_repo_token }}
+          persist-credentials: false
+
+      - name: 🔍 Compare
+        if: steps.gate.outputs.run == 'true'
+        env:
+          SELF_DIR: ${{ github.event.repository.name }}
+          MAKE_TARGET: ${{ inputs.make_target }}
+          MAKE_ARGS: ${{ inputs.make_args }}
+        run: |
+          read -r -a args <<< "$MAKE_ARGS"
+          make -C "$SELF_DIR" "$MAKE_TARGET" ${args[@]+"${args[@]}"}
+
+      - name: 📊 Summary
+        if: always()
+        env:
+          CONTRACT: ${{ inputs.contract_name }}
+          OTHER_REPO: ${{ inputs.other_repo }}
+          FORK: ${{ steps.gate.outputs.fork }}
+          RELEVANT: ${{ steps.gate.outputs.relevant }}
+          PAIRED_REF: ${{ steps.pair.outputs.ref }}
+          STATUS: ${{ job.status }}
+        run: |
+          {
+            echo "### Contract: ${CONTRACT}"
+            echo ""
+            if [[ "$FORK" == "true" ]]; then
+              echo "Skipped: the pull request comes from a fork."
+            elif [[ "$RELEVANT" == "false" ]]; then
+              echo "Skipped: no file of this contract changed."
+            else
+              echo "- Compared against \`${OTHER_REPO}\` on \`${PAIRED_REF}\`"
+              echo "- Result: ${STATUS}"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
