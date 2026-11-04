@@ -135,7 +135,13 @@ jobs:
       - name: 🔍 Type check
         run: COMPOSE_FILES="${{ inputs.compose_files }}" make type-check
 
+      # The same token as in "Build Docker images": a service whose `make build` runs its own
+      # `docker build` (render) installs its private @itec42 packages in that build too, and the build
+      # cache cannot stand in for the token (an argument with another value is another cache key).
+      # Empty when the caller passes nothing, which is correct for services with no private dependencies.
       - name: 🏗️ Build
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN }}
         run: COMPOSE_FILES="${{ inputs.compose_files }}" make build
 
       - name: 🧪 Test
