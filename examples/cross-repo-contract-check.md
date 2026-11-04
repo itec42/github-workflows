@@ -53,13 +53,16 @@ jobs:
 | Secret | Purpose |
 |--------|---------|
 | `cross_repo_token` | Token that can read the other repository |
+| `node_auth_token` | No. `secrets.GITHUB_TOKEN`, for a target that builds the caller's Docker image and installs private `@itec42` packages |
 
 ## Rules the workflow keeps
 
 - **No value from the pull request is written into a shell step.** The branch name goes through
   `env:` into the script and into the checkout as its `ref:`. A branch named
   `` `touch x` `` or `x$(touch${IFS}x)` is plain text.
-- `permissions: contents: read`.
+- The workflow sets no `permissions` of its own; it inherits the calling job's. **The caller sets them:**
+  `contents: read`, plus `packages: read` when it passes `node_auth_token`. A fixed block in the workflow would
+  narrow the token and break the install of private packages.
 - The fork skip and the path filter are steps, not `on:` filters.
 
 ## Testing a branch of this workflow
