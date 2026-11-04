@@ -62,6 +62,12 @@ on:
       cross_repo_token:
         description: 'Token that can read the other repository'
         required: true
+      node_auth_token:
+        description: >
+          Token for installing private @itec42 packages from GitHub Packages when the make target builds
+          the caller's Docker image (read by the compose file as a build argument). Pass secrets.GITHUB_TOKEN
+          and give the calling job `packages: read`. Leave it out for a target that builds nothing.
+        required: false
 
 permissions:
   contents: read
@@ -158,6 +164,7 @@ jobs:
           SELF_DIR: ${{ github.event.repository.name }}
           MAKE_TARGET: ${{ inputs.make_target }}
           MAKE_ARGS: ${{ inputs.make_args }}
+          NODE_AUTH_TOKEN: ${{ secrets.node_auth_token }}
         run: |
           read -r -a args <<< "$MAKE_ARGS"
           make -C "$SELF_DIR" "$MAKE_TARGET" ${args[@]+"${args[@]}"}
