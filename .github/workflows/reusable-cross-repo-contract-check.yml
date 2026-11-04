@@ -69,8 +69,11 @@ on:
           and give the calling job `packages: read`. Leave it out for a target that builds nothing.
         required: false
 
-permissions:
-  contents: read
+# No `permissions` block on purpose: the jobs inherit the permissions of the calling job. A called workflow
+# can only narrow them, so a fixed `contents: read` here would strip `packages: read` from the
+# `node_auth_token` (the caller's GITHUB_TOKEN) and the install of private @itec42 packages would fail
+# with a 403. The caller sets `permissions` itself: `contents: read`, plus `packages: read` when it passes
+# `node_auth_token`.
 
 jobs:
   check:
