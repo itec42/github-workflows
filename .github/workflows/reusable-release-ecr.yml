@@ -128,10 +128,15 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      # `registry-url` and `scope` write the npm user config that reads `NODE_AUTH_TOKEN` for the @itec42 scope
+      # (GitHub Packages) only. The install below runs in the repository root: a service whose root
+      # `package.json` holds a workspace with a private @itec42 package would fail there with a 401 otherwise.
       - name: 📦 Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          registry-url: https://npm.pkg.github.com
+          scope: '@itec42'
 
       - name: 📥 Download shared release config
         run: |
@@ -141,6 +146,8 @@ jobs:
           cat .release-it.json
 
       - name: 📦 Install release-it and plugins
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN }}
         run: npm install --no-save release-it @release-it/conventional-changelog
 
       - name: 🏷️ Run release-it
